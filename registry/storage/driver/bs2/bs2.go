@@ -1,6 +1,7 @@
 package bs2
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/aclisp/go-bs2"
@@ -9,6 +10,8 @@ import (
 	"github.com/docker/distribution/registry/storage/driver/base"
 	"github.com/docker/distribution/registry/storage/driver/factory"
 	"io"
+	"io/ioutil"
+	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -171,24 +174,56 @@ func (d *driver) Name() string {
 // This should primarily be used for small objects.
 func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
 	path = d.bs2Path(path, bs2PathGet)
-	return d.Conn.ObjectGetBytes(d.SmallBucket, path)
+	// First try to get it from the small-file bucket
+	p, err := d.Conn.ObjectGetBytes(d.SmallBucket, path)
+	if err != bs2.ObjectNotFound {
+		return p, err
+	}
+	// Not exists in small-file bucket, then get it from large-file bucket
+	rc, _, err := d.Conn.ObjectOpen(d.LargeBucket, path, true, nil)
+	if err != nil {
+		return nil, parseError(path, err)
+	}
+	defer rc.Close()
+	return ioutil.ReadAll(rc)
 }
 
 // PutContent stores the []byte content at a location designated by "path".
 // This should primarily be used for small objects.
 func (d *driver) PutContent(ctx context.Context, path string, contents []byte) error {
-	if len(contents) >= smallFileMaxSize {
-		return errors.New("PutContent was called with too large file")
-	}
 	path = d.bs2Path(path, bs2PathPut)
-	return d.Conn.ObjectPutBytes(d.SmallBucket, path, contents, d.getContentType())
+
+	if len(contents) < smallFileMaxSize {
+		return d.Conn.ObjectPutBytes(d.SmallBucket, path, contents, d.getContentType())
+	}
+
+	return errors.New("PutContent was called with too large file")
 }
 
 // ReadStream retrieves an io.ReadCloser for the content stored at "path"
 // with a given byte offset.
 // May be used to resume reading a stream by providing a nonzero offset.
 func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
-	return nil, nil
+	path = d.bs2Path(path, bs2PathGet)
+	headers := make(bs2.Headers)
+	headers["Range"] = "bytes=" + strconv.FormatInt(offset, 10) + "-"
+	// First try to get it from the large-file bucket
+	rc, _, err := d.Conn.ObjectOpen(d.LargeBucket, path, false, headers)
+	if err != bs2.ObjectNotFound {
+		if bs2Err, ok := err.(*bs2.Error); ok && bs2Err.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+			return ioutil.NopCloser(bytes.NewReader(nil)), nil
+		}
+		return rc, err
+	}
+	// Not exists in large-file bucket, then get it from small-file bucket
+	rc, _, err = d.Conn.ObjectOpen(d.SmallBucket, path, false, headers)
+	if err == bs2.ObjectNotFound {
+		return nil, parseError(path, err)
+	}
+	if bs2Err, ok := err.(*bs2.Error); ok && bs2Err.StatusCode == http.StatusRequestedRangeNotSatisfiable {
+		return ioutil.NopCloser(bytes.NewReader(nil)), nil
+	}
+	return rc, err
 }
 
 // WriteStream stores the contents of the provided io.ReadCloser at a
@@ -264,4 +299,12 @@ func (d *driver) bs2Path(path string, action bs2PathAction) string {
 	}
 	// Return the path with leading slash trimmed, which is required by BS2 API.
 	return strings.TrimLeft(path, "/")
+}
+
+func parseError(path string, err error) error {
+	if err == bs2.ObjectNotFound {
+		return storagedriver.PathNotFoundError{Path: path}
+	}
+
+	return err
 }
