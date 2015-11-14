@@ -359,6 +359,15 @@ func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 	fi := storagedriver.FileInfoFields{
 		Path: path,
 	}
+	if !d.pathSet[path] {
+		for file := range d.pathSet {
+			if strings.HasPrefix(file, path) {
+				fi.IsDir = true
+				return storagedriver.FileInfoInternal{FileInfoFields: fi}, nil
+			}
+		}
+		return nil, storagedriver.PathNotFoundError{Path: path}
+	}
 	// First try to get it from the large-file bucket
 	info, _, err := d.Conn.Object(d.LargeBucket, d.bs2Path(path))
 	if err != bs2.ObjectNotFound {
@@ -386,9 +395,9 @@ func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo,
 func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 	// Implement locally. TODO Need to consider availability
 	var sub []string
-	for k := range d.pathSet {
-		if strings.HasPrefix(k, path) {
-			sub = append(sub, k)
+	for file := range d.pathSet {
+		if strings.HasPrefix(file, path) {
+			sub = append(sub, file)
 		}
 	}
 	return sub, nil
@@ -432,14 +441,32 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
 func (d *driver) Delete(ctx context.Context, path string) (err error) {
-	var bucket string
-	if bucket, err = d.bucket(path); err != nil {
-		return parseError(path, err)
+	var sub []string
+	if !d.pathSet[path] {
+		for file := range d.pathSet {
+			if strings.HasPrefix(file, path) {
+				sub = append(sub, file)
+			}
+		}
+		if len(sub) == 0 {
+			return storagedriver.PathNotFoundError{Path: path}
+		}
+	} else {
+		sub = append(sub, path)
 	}
-	if err = d.Conn.ObjectDelete(bucket, d.bs2Path(path)); err != nil {
-		return
+
+	for _, item := range sub {
+		var bucket string
+		if bucket, err = d.bucket(item); err != nil {
+			//return parseError(item, err)
+			continue
+		}
+		if err = d.Conn.ObjectDelete(bucket, d.bs2Path(item)); err != nil {
+			//return
+			continue
+		}
+		delete(d.pathSet, item)
 	}
-	delete(d.pathSet, path)
 	return
 }
 
