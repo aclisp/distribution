@@ -3,11 +3,127 @@ package bs2
 import (
 	"testing"
 
+	"bytes"
+	"fmt"
+	"github.com/docker/distribution/registry/storage/driver/factory"
 	"gopkg.in/check.v1"
+	"io/ioutil"
+	"strings"
 )
 
 // Hook up gocheck into the "go test" runner.
-func Test(t *testing.T) { check.TestingT(t) }
+func test(t *testing.T) { check.TestingT(t) }
 
 func init() {
+}
+
+func TestBasic(t *testing.T) {
+	driver, err := factory.Create(driverName, map[string]interface{}{
+		"accesskey":   "ak_tqo",
+		"secretkey":   "78f372edb18b8c803b3192fbd441880f96cd7dfe",
+		"smallbucket": "sigmasmallimages",
+		"largebucket": "sigmalargeimages",
+	})
+	if err != nil {
+		t.Fatalf("Can not create driver from factory: %s", err)
+	}
+
+	err = driver.PutContent(nil, "/a", []byte("hello world!"))
+	if err != nil {
+		t.Fatalf("Can not put content: %s", err)
+	}
+
+	out, err := driver.GetContent(nil, "/a")
+	if err != nil {
+		t.Fatalf("Can not get content: %s", err)
+	}
+	if string(out) != "hello world!" {
+		t.Fatalf("What I get is not the same as what I put!")
+	}
+
+	stream, err := driver.ReadStream(nil, "/a", 0)
+	if err != nil {
+		t.Fatalf("Can not read stream: %s", err)
+	}
+	defer stream.Close()
+	out, err = ioutil.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("Can not read all from stream: %s", err)
+	}
+	if string(out) != "hello world!" {
+		t.Fatalf("What I get is not the same as what I put! got=%s", out)
+	}
+
+	stream, err = driver.ReadStream(nil, "/a", 11)
+	if err != nil {
+		t.Fatalf("Can not read stream: %s", err)
+	}
+	defer stream.Close()
+	out, err = ioutil.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("Can not read all from stream: %s", err)
+	}
+	if string(out) != "!" {
+		t.Fatalf("What I get is not the same as what I put!")
+	}
+
+	fmt.Println("Write stream with offset 0")
+	nRead, err := driver.WriteStream(nil, "/a/b/1", 0, strings.NewReader("12345678901234567890"))
+	if err != nil {
+		t.Fatalf("Can not write stream: %s", err)
+	}
+	if nRead != 20 {
+		t.Fatalf("nRead is wrong: it is %d", nRead)
+	}
+
+	fmt.Println("Write stream with offset 20")
+	nRead, err = driver.WriteStream(nil, "/a/b/1", 20, strings.NewReader("12345678901234567890"))
+	if err != nil {
+		t.Fatalf("Can not write stream: %s", err)
+	}
+	if nRead != 20 {
+		t.Fatalf("nRead is wrong: it is %d", nRead)
+	}
+
+	// Test re-writing the last chunk
+	fmt.Println("Write stream with offset 20")
+	nRead, err = driver.WriteStream(nil, "/a/b/1", 20, strings.NewReader("12345678901234567890"))
+	if err != nil {
+		t.Fatalf("Can not write stream: %s", err)
+	}
+	if nRead != 20 {
+		t.Fatalf("nRead is wrong: it is %d", nRead)
+	}
+
+	out, err = driver.GetContent(nil, "/a/b/1")
+	if err != nil {
+		t.Fatalf("Can not get content: %s", err)
+	}
+	if string(out) != "1234567890123456789012345678901234567890" {
+		t.Fatalf("What I get is not the same as what I put! got=%s", out)
+	}
+
+	// Writing past size of file extends file (no offset error).
+	fmt.Println("Write stream with offset 60")
+	nRead, err = driver.WriteStream(nil, "/a/b/1", 60, strings.NewReader("12345678901234567890"))
+	if err != nil {
+		t.Fatalf("Can not write stream: %s", err)
+	}
+	if nRead != 20 {
+		t.Fatalf("nRead is wrong: it is %d", nRead)
+	}
+
+	out, err = driver.GetContent(nil, "/a/b/1")
+	if err != nil {
+		t.Fatalf("Can not get content: %s", err)
+	}
+	if string(out[:40]) != "1234567890123456789012345678901234567890" {
+		t.Fatalf("What I get is not the same as what I put! got=%v", out)
+	}
+	if bytes.Compare(out[40:60], make([]byte, 20)) != 0 {
+		t.Fatalf("What I get is not the same as what I put! got=%v", out)
+	}
+	if string(out[60:]) != "12345678901234567890" {
+		t.Fatalf("What I get is not the same as what I put! got=%v", out)
+	}
 }
