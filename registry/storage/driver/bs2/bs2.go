@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"sync"
 )
 
 const driverName = "bs2"
@@ -28,11 +29,6 @@ const minChunkSize = 100 * 1024
 //const minChunkSize = 6
 
 const defaultChunkSize = 2 * minChunkSize
-
-// smallFileMaxSize defines the maximum size of a BS2 "small" file.
-// Files that smaller than this value are BS2 "small" files.
-// Files that equal to or larger than this value are BS2 "large" files.
-const smallFileMaxSize = 16 * 1024 * 1024
 
 func init() {
 	factory.Register(driverName, &bs2DriverFactory{})
@@ -47,21 +43,20 @@ func (factory *bs2DriverFactory) Create(parameters map[string]interface{}) (stor
 
 //DriverParameters A struct that encapsulates all of the driver parameters after all values have been set
 type DriverParameters struct {
-	AccessKey   string
-	SecretKey   string
-	SmallBucket string
-	LargeBucket string
-	ChunkSize   int64
+	AccessKey string
+	SecretKey string
+	Bucket    string
+	ChunkSize int64
 }
 
 type driver struct {
-	Conn        bs2.Connection
-	SmallBucket string
-	LargeBucket string
-	ChunkSize   int64
+	Conn      bs2.Connection
+	Bucket    string
+	ChunkSize int64
 
 	zeros   []byte          // shared, zero-valued buffer used for WriteStream
 	pathSet map[string]bool // remember all the paths, because BS2 does not have "LIST" API
+	pathLock sync.Mutex
 }
 
 type baseEmbed struct {
@@ -91,14 +86,9 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 		return nil, fmt.Errorf("No secret key provided")
 	}
 
-	smallBucket, ok := parameters["smallbucket"]
-	if !ok || fmt.Sprint(smallBucket) == "" {
-		return nil, fmt.Errorf("No small-file bucket parameter provided")
-	}
-
-	largeBucket, ok := parameters["largebucket"]
-	if !ok || fmt.Sprint(largeBucket) == "" {
-		return nil, fmt.Errorf("No large-file bucket parameter provided")
+	bucket, ok := parameters["bucket"]
+	if !ok || fmt.Sprint(bucket) == "" {
+		return nil, fmt.Errorf("No bucket parameter provided")
 	}
 
 	chunkSize := int64(defaultChunkSize)
@@ -127,8 +117,7 @@ func FromParameters(parameters map[string]interface{}) (*Driver, error) {
 	params := DriverParameters{
 		fmt.Sprint(accessKey),
 		fmt.Sprint(secretKey),
-		fmt.Sprint(smallBucket),
-		fmt.Sprint(largeBucket),
+		fmt.Sprint(bucket),
 		chunkSize,
 	}
 
@@ -143,11 +132,10 @@ func New(params DriverParameters) *Driver {
 			SecretKey: params.SecretKey,
 			//Logger: log.New(os.Stderr, "bs2: ", 0),
 		},
-		SmallBucket: params.SmallBucket,
-		LargeBucket: params.LargeBucket,
-		ChunkSize:   params.ChunkSize,
-		zeros:       make([]byte, params.ChunkSize),
-		pathSet:     make(map[string]bool),
+		Bucket:    params.Bucket,
+		ChunkSize: params.ChunkSize,
+		zeros:     make([]byte, params.ChunkSize),
+		pathSet:   make(map[string]bool),
 	}
 
 	return &Driver{
@@ -170,59 +158,70 @@ func (d *driver) Name() string {
 
 // GetContent retrieves the content stored at "path" as a []byte.
 // This should primarily be used for small objects.
-func (d *driver) GetContent(ctx context.Context, path string) ([]byte, error) {
-	// First try to get it from the small-file bucket
-	p, err := d.Conn.ObjectGetBytes(d.SmallBucket, d.bs2Path(path))
-	if err != bs2.ObjectNotFound {
-		return p, err
+func (d *driver) GetContent(ctx context.Context, path string) (contents []byte, err error) {
+	logger := log.New(os.Stderr, "GC: ", 0)
+	d.Conn.Logger = logger
+	defer func() {
+		d.Conn.Logger = nil
+	}()
+
+	for i := 0; i < 5; i++ {
+		var buf bytes.Buffer
+		_, err = d.Conn.ObjectGet(d.Bucket, d.bs2Path(path), &buf, false, nil)
+		contents = buf.Bytes()
+		if err == bs2.ObjectNotFound {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		return
 	}
-	// Not exists in small-file bucket, then get it from large-file bucket
-	rc, _, err := d.Conn.ObjectOpen(d.LargeBucket, d.bs2Path(path), true, nil)
-	if err != nil {
-		return nil, parseError(path, err)
-	}
-	defer rc.Close()
-	return ioutil.ReadAll(rc)
+	return nil, parseError(path, err)
 }
 
 // PutContent stores the []byte content at a location designated by "path".
 // This should primarily be used for small objects.
 func (d *driver) PutContent(ctx context.Context, path string, contents []byte) (err error) {
-	if len(contents) < smallFileMaxSize {
-		err = d.Conn.ObjectPutBytes(d.SmallBucket, d.bs2Path(path), contents, d.getContentType())
-		if err != nil {
-			return
-		}
-		d.pathSet[path] = true
+	logger := log.New(os.Stderr, "PC: ", 0)
+	d.Conn.Logger = logger
+	defer func() {
+		d.Conn.Logger = nil
+	}()
+
+	err = d.Conn.ObjectPutBytes(d.Bucket, d.bs2Path(path), contents, d.getContentType())
+	if err != nil {
 		return
 	}
-
-	return fmt.Errorf("PutContent was called with too large file: %s", path)
+	d.pathLock.Lock()
+	defer d.pathLock.Unlock()
+	d.pathSet[path] = true
+	return
 }
 
 // ReadStream retrieves an io.ReadCloser for the content stored at "path"
 // with a given byte offset.
 // May be used to resume reading a stream by providing a nonzero offset.
-func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (io.ReadCloser, error) {
+func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (rc io.ReadCloser, err error) {
+	logger := log.New(os.Stderr, "RS: ", 0)
+	d.Conn.Logger = logger
+	defer func() {
+		d.Conn.Logger = nil
+	}()
+
 	headers := make(bs2.Headers)
 	headers["Range"] = "bytes=" + strconv.FormatInt(offset, 10) + "-"
-	// First try to get it from the large-file bucket
-	rc, _, err := d.Conn.ObjectOpen(d.LargeBucket, d.bs2Path(path), false, headers)
-	if err != bs2.ObjectNotFound {
+
+	for i := 0; i < 5; i++ {
+		rc, _, err = d.Conn.ObjectOpen(d.Bucket, d.bs2Path(path), false, headers)
+		if err == bs2.ObjectNotFound {
+			time.Sleep(1 * time.Second)
+			continue
+		}
 		if bs2Err, ok := err.(*bs2.Error); ok && bs2Err.StatusCode == http.StatusRequestedRangeNotSatisfiable {
 			return ioutil.NopCloser(bytes.NewReader(nil)), nil
 		}
-		return rc, err
+		return
 	}
-	// Not exists in large-file bucket, then get it from small-file bucket
-	rc, _, err = d.Conn.ObjectOpen(d.SmallBucket, d.bs2Path(path), false, headers)
-	if err == bs2.ObjectNotFound {
-		return nil, parseError(path, err)
-	}
-	if bs2Err, ok := err.(*bs2.Error); ok && bs2Err.StatusCode == http.StatusRequestedRangeNotSatisfiable {
-		return ioutil.NopCloser(bytes.NewReader(nil)), nil
-	}
-	return rc, err
+	return nil, parseError(path, err)
 }
 
 // WriteStream stores the contents of the provided io.Reader at a
@@ -245,16 +244,15 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	var partNumber int = -1
 	var multi *bs2.Multi
 
-	// For WriteStream, we always use large-file bucket
 	if offset == 0 {
-		multi, err = d.Conn.InitMulti(d.LargeBucket, d.bs2Path(path), false, d.getContentType())
+		multi, err = d.Conn.InitMulti(d.Bucket, d.bs2Path(path), false, d.getContentType())
 		if err != nil {
 			return 0, err
 		}
 	} else {
 		// Need retry to ensure the last upload parts appear!
 		for i := 0; i < 5; i++ {
-			multi, err = d.Conn.Multi(d.LargeBucket, d.bs2Path(path))
+			multi, err = d.Conn.Multi(d.Bucket, d.bs2Path(path))
 			if err == bs2.ObjectNotFound {
 				time.Sleep(1 * time.Second)
 				continue
@@ -325,6 +323,8 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		if part.Size != d.ChunkSize {
 			//partNumber++
 			//err := multi.Complete(partNumber)
+			d.pathLock.Lock()
+			defer d.pathLock.Unlock()
 			d.pathSet[path] = true
 			return totalRead, err
 		}
@@ -347,6 +347,8 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		if part.Size != d.ChunkSize {
 			//partNumber++
 			//err := multi.Complete(partNumber)
+			d.pathLock.Lock()
+			defer d.pathLock.Unlock()
 			d.pathSet[path] = true
 			return totalRead, err
 		}
@@ -355,70 +357,70 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 
 // Stat retrieves the FileInfo for the given path, including the current
 // size in bytes and the creation time.
-func (d *driver) Stat(ctx context.Context, path string) (storagedriver.FileInfo, error) {
+func (d *driver) Stat(ctx context.Context, path string) (info storagedriver.FileInfo, err error) {
 	fi := storagedriver.FileInfoFields{
 		Path: path,
 	}
+	d.pathLock.Lock()
 	if !d.pathSet[path] {
 		for file := range d.pathSet {
 			if strings.HasPrefix(file, path) {
 				fi.IsDir = true
+				d.pathLock.Unlock()
 				return storagedriver.FileInfoInternal{FileInfoFields: fi}, nil
 			}
 		}
-		return nil, storagedriver.PathNotFoundError{Path: path}
 	}
-	// First try to get it from the large-file bucket
-	info, _, err := d.Conn.Object(d.LargeBucket, d.bs2Path(path))
-	if err != bs2.ObjectNotFound {
+	d.pathLock.Unlock()
+
+	for i := 0; i < 5; i++ {
+		var obj bs2.Object
+		obj, _, err = d.Conn.Object(d.Bucket, d.bs2Path(path))
+		if err == bs2.ObjectNotFound {
+			time.Sleep(1 * time.Second)
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
-		fi.Size = info.Bytes
-		fi.ModTime = info.LastModified
+		d.pathLock.Lock()
+		defer d.pathLock.Unlock()
+		d.pathSet[path] = true
+		fi.Size = obj.Bytes
+		fi.ModTime = obj.LastModified
 		fi.IsDir = false
 		return storagedriver.FileInfoInternal{FileInfoFields: fi}, nil
 	}
-	// Not exists in large-file bucket, then get it from small-file bucket
-	info, _, err = d.Conn.Object(d.SmallBucket, d.bs2Path(path))
-	if err != nil {
-		return nil, parseError(path, err)
-	}
-	fi.Size = info.Bytes
-	fi.ModTime = info.LastModified
-	fi.IsDir = false
-	return storagedriver.FileInfoInternal{FileInfoFields: fi}, nil
+	return nil, parseError(path, err)
 }
 
 // List returns a list of the objects that are direct descendants of the
 //given path.
 func (d *driver) List(ctx context.Context, path string) ([]string, error) {
+	if path[len(path)-1] != '/' {
+		path = path + "/"
+	}
+
 	// Implement locally. TODO Need to consider availability
-	var sub []string
+	sub := make(map[string]bool)
+	d.pathLock.Lock()
 	for file := range d.pathSet {
 		if strings.HasPrefix(file, path) {
-			sub = append(sub, file)
+			file = file[len(path):]
+			slash := strings.IndexByte(file, '/')
+			if slash != -1 {
+				file = file[:slash]
+			}
+			sub[file] = true
 		}
 	}
-	return sub, nil
-}
+	d.pathLock.Unlock()
 
-// bucket confirms which bucket the path stays in
-func (d *driver) bucket(path string) (bucket string, err error) {
-	_, _, err = d.Conn.Object(d.LargeBucket, d.bs2Path(path))
-	if err != bs2.ObjectNotFound {
-		if err != nil {
-			return
-		}
-		bucket = d.LargeBucket
-		return
+	var r []string
+	for key := range sub {
+		r = append(r, path+key)
 	}
-	_, _, err = d.Conn.Object(d.SmallBucket, d.bs2Path(path))
-	if err != nil {
-		return
-	}
-	bucket = d.SmallBucket
-	return
+	return r, nil
 }
 
 // Move moves an object stored at sourcePath to destPath, removing the
@@ -426,22 +428,40 @@ func (d *driver) bucket(path string) (bucket string, err error) {
 // Note: This may be no more efficient than a copy followed by a delete for
 // many implementations.
 func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (err error) {
-	var sourceBucket string
-	if sourceBucket, err = d.bucket(sourcePath); err != nil {
-		return parseError(sourcePath, err)
-	}
-	_, err = d.Conn.ObjectMove(sourceBucket, d.bs2Path(sourcePath), sourceBucket, d.bs2Path(destPath), nil)
-	if err != nil {
+	logger := log.New(os.Stderr, "MV: ", 0)
+	d.Conn.Logger = logger
+	defer func() {
+		d.Conn.Logger = nil
+	}()
+
+	for i := 0; i < 5; i++ {
+		_, err = d.Conn.ObjectMove(d.Bucket, d.bs2Path(sourcePath), d.Bucket, d.bs2Path(destPath), nil)
+		if err == bs2.ObjectNotFound {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		if err != nil {
+			return
+		}
+		d.pathLock.Lock()
+		defer d.pathLock.Unlock()
+		d.pathSet[destPath] = true
+		delete(d.pathSet, sourcePath)
 		return
 	}
-	d.pathSet[destPath] = true
-	delete(d.pathSet, sourcePath)
-	return
+	return parseError(sourcePath, err)
 }
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
 func (d *driver) Delete(ctx context.Context, path string) (err error) {
+	logger := log.New(os.Stderr, "DE: ", 0)
+	d.Conn.Logger = logger
+	defer func() {
+		d.Conn.Logger = nil
+	}()
+
 	var sub []string
+	d.pathLock.Lock()
 	if !d.pathSet[path] {
 		for file := range d.pathSet {
 			if strings.HasPrefix(file, path) {
@@ -449,22 +469,32 @@ func (d *driver) Delete(ctx context.Context, path string) (err error) {
 			}
 		}
 		if len(sub) == 0 {
+			d.pathLock.Unlock()
 			return storagedriver.PathNotFoundError{Path: path}
 		}
 	} else {
 		sub = append(sub, path)
 	}
+	d.pathLock.Unlock()
 
 	for _, item := range sub {
-		var bucket string
-		if bucket, err = d.bucket(item); err != nil {
-			//return parseError(item, err)
-			continue
-		}
-		if err = d.Conn.ObjectDelete(bucket, d.bs2Path(item)); err != nil {
+		if err = d.Conn.ObjectDelete(d.Bucket, d.bs2Path(item)); err != nil {
 			//return
 			continue
 		}
+		// Ensure it is really deleted!
+		//for i := 0; i < 5; i++ {
+		//	time.Sleep(5 * time.Second)
+		//	rc, _, err := d.Conn.ObjectOpen(d.Bucket, d.bs2Path(item), false, nil)
+		//	if err == bs2.ObjectNotFound {
+		//		break
+		//	}
+		//	if err == nil {
+		//		rc.Close()
+		//	}
+		//}
+		d.pathLock.Lock()
+		defer d.pathLock.Unlock()
 		delete(d.pathSet, item)
 	}
 	return
@@ -474,16 +504,44 @@ func (d *driver) Delete(ctx context.Context, path string) (err error) {
 // the given path, possibly using the given options.
 // May return an ErrUnsupportedMethod in certain StorageDriver
 // implementations.
-func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (string, error) {
-	bucket, err := d.bucket(path)
-	if err != nil {
-		return "", parseError(path, err)
+func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (URL string, err error) {
+	logger := log.New(os.Stderr, "UF: ", 0)
+	d.Conn.Logger = logger
+	defer func() {
+		d.Conn.Logger = nil
+	}()
+
+	methodString := "GET"
+	method, ok := options["method"]
+	if ok {
+		methodString, ok = method.(string)
+		if !ok || (methodString != "GET" && methodString != "HEAD") {
+			return "", storagedriver.ErrUnsupportedMethod{}
+		}
 	}
-	urls, err := d.Conn.ObjectTempUrl(bucket, d.bs2Path(path), 900)
-	if err != nil {
-		return "", err
+
+	expiresTime := time.Now().Add(15 * time.Minute)
+	expires, ok := options["expiry"]
+	if ok {
+		et, ok := expires.(time.Time)
+		if ok {
+			expiresTime = et
+		}
 	}
-	return urls[0], nil
+
+	for i := 0; i < 5; i++ {
+		var urls []string
+		urls, err = d.Conn.ObjectTempUrl(d.Bucket, d.bs2Path(path), methodString, int64(expiresTime.Sub(time.Now())/time.Second))
+		if err == bs2.ObjectNotFound {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		if err != nil {
+			return "", err
+		}
+		return urls[0], nil
+	}
+	return "", parseError(path, err)
 }
 
 func (d *driver) getContentType() string {

@@ -5,24 +5,42 @@ import (
 
 	"bytes"
 	"fmt"
+	storagedriver "github.com/docker/distribution/registry/storage/driver"
 	"github.com/docker/distribution/registry/storage/driver/factory"
+	"github.com/docker/distribution/registry/storage/driver/testsuites"
 	"gopkg.in/check.v1"
 	"io/ioutil"
 	"strings"
 )
 
 // Hook up gocheck into the "go test" runner.
-func test(t *testing.T) { check.TestingT(t) }
+func Test(t *testing.T) { check.TestingT(t) }
+
+var bs2DriverConstructor func() (*Driver, error)
+var skipBS2 func() string
 
 func init() {
+	bs2DriverConstructor = func() (*Driver, error) {
+		parameters := DriverParameters{
+			AccessKey: "ak_tqo",
+			SecretKey: "78f372edb18b8c803b3192fbd441880f96cd7dfe",
+			Bucket:    "sigmalargeimages",
+			ChunkSize: defaultChunkSize,
+		}
+
+		return New(parameters), nil
+	}
+
+	testsuites.RegisterSuite(func() (storagedriver.StorageDriver, error) {
+		return bs2DriverConstructor()
+	}, testsuites.NeverSkip)
 }
 
-func TestBasic(t *testing.T) {
+func testBasic(t *testing.T) {
 	driver, err := factory.Create(driverName, map[string]interface{}{
-		"accesskey":   "ak_tqo",
-		"secretkey":   "78f372edb18b8c803b3192fbd441880f96cd7dfe",
-		"smallbucket": "sigmasmallimages",
-		"largebucket": "sigmalargeimages",
+		"accesskey": "ak_tqo",
+		"secretkey": "78f372edb18b8c803b3192fbd441880f96cd7dfe",
+		"bucket":    "sigmalargeimages",
 	})
 	if err != nil {
 		t.Fatalf("Can not create driver from factory: %s", err)
@@ -95,9 +113,14 @@ func TestBasic(t *testing.T) {
 		t.Fatalf("nRead is wrong: it is %d", nRead)
 	}
 
-	out, err = driver.GetContent(nil, "/a/b/1")
+	stream, err = driver.ReadStream(nil, "/a/b/1", 0)
 	if err != nil {
 		t.Fatalf("Can not get content: %s", err)
+	}
+	defer stream.Close()
+	out, err = ioutil.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("Can not read all from stream: %s", err)
 	}
 	if string(out) != "1234567890123456789012345678901234567890" {
 		t.Fatalf("What I get is not the same as what I put! got=%s", out)
@@ -113,9 +136,14 @@ func TestBasic(t *testing.T) {
 		t.Fatalf("nRead is wrong: it is %d", nRead)
 	}
 
-	out, err = driver.GetContent(nil, "/a/b/1")
+	stream, err = driver.ReadStream(nil, "/a/b/1", 0)
 	if err != nil {
 		t.Fatalf("Can not get content: %s", err)
+	}
+	defer stream.Close()
+	out, err = ioutil.ReadAll(stream)
+	if err != nil {
+		t.Fatalf("Can not read all from stream: %s", err)
 	}
 	if string(out[:40]) != "1234567890123456789012345678901234567890" {
 		t.Fatalf("What I get is not the same as what I put! got=%v", out)
