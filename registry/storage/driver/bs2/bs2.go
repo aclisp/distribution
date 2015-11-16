@@ -54,6 +54,7 @@ type driver struct {
 	Bucket    string
 	ChunkSize int64
 
+	pool     sync.Pool       // pool []byte buffers used for WriteStream
 	zeros    []byte          // shared, zero-valued buffer used for WriteStream
 	pathSet  map[string]bool // remember all the paths, because BS2 does not have "LIST" API
 	pathLock sync.Mutex
@@ -130,13 +131,19 @@ func New(params DriverParameters) *Driver {
 		Conn: bs2.Connection{
 			AccessKey: params.AccessKey,
 			SecretKey: params.SecretKey,
-			//Logger: log.New(os.Stderr, "bs2: ", 0),
+			Logger:    log.New(os.Stdout, "", 0),
 		},
 		Bucket:    params.Bucket,
 		ChunkSize: params.ChunkSize,
 		zeros:     make([]byte, params.ChunkSize),
 		pathSet:   make(map[string]bool),
 	}
+
+	d.pool.New = func() interface{} {
+		return make([]byte, d.ChunkSize)
+	}
+
+	d.loadPathSet()
 
 	return &Driver{
 		baseEmbed: baseEmbed{
@@ -159,10 +166,9 @@ func (d *driver) Name() string {
 // GetContent retrieves the content stored at "path" as a []byte.
 // This should primarily be used for small objects.
 func (d *driver) GetContent(ctx context.Context, path string) (contents []byte, err error) {
-	logger := log.New(os.Stderr, "GC: ", 0)
-	d.Conn.Logger = logger
+	d.Conn.Logger.SetPrefix("GC: ")
 	defer func() {
-		d.Conn.Logger = nil
+		d.Conn.Logger.SetPrefix("")
 	}()
 
 	d.pathLock.Lock()
@@ -188,10 +194,9 @@ func (d *driver) GetContent(ctx context.Context, path string) (contents []byte, 
 // PutContent stores the []byte content at a location designated by "path".
 // This should primarily be used for small objects.
 func (d *driver) PutContent(ctx context.Context, path string, contents []byte) (err error) {
-	logger := log.New(os.Stderr, "PC: ", 0)
-	d.Conn.Logger = logger
+	d.Conn.Logger.SetPrefix("PC: ")
 	defer func() {
-		d.Conn.Logger = nil
+		d.Conn.Logger.SetPrefix("")
 	}()
 
 	err = d.Conn.ObjectPutBytes(d.Bucket, d.bs2Path(path), contents, d.getContentType())
@@ -202,6 +207,7 @@ func (d *driver) PutContent(ctx context.Context, path string, contents []byte) (
 	d.pathSet[path] = true
 	d.pathLock.Unlock()
 
+	d.savePathSet()
 	time.Sleep(5 * time.Second)
 	return
 }
@@ -210,10 +216,9 @@ func (d *driver) PutContent(ctx context.Context, path string, contents []byte) (
 // with a given byte offset.
 // May be used to resume reading a stream by providing a nonzero offset.
 func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (rc io.ReadCloser, err error) {
-	logger := log.New(os.Stderr, "RS: ", 0)
-	d.Conn.Logger = logger
+	d.Conn.Logger.SetPrefix("RS: ")
 	defer func() {
-		d.Conn.Logger = nil
+		d.Conn.Logger.SetPrefix("")
 	}()
 
 	d.pathLock.Lock()
@@ -250,10 +255,9 @@ func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (rc 
 // Offsets past the current size will write from the position
 // beyond the end of the file.
 func (d *driver) WriteStream(ctx context.Context, path string, offset int64, reader io.Reader) (totalRead int64, err error) {
-	logger := log.New(os.Stderr, "WS: ", 0)
-	d.Conn.Logger = logger
+	d.Conn.Logger.SetPrefix("WS: ")
 	defer func() {
-		d.Conn.Logger = nil
+		d.Conn.Logger.SetPrefix("")
 	}()
 
 	var currentSize int64 = 0
@@ -299,7 +303,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		}
 	}
 
-	d.Conn.Logger.Printf("currentSize=%d, partNumber=%d, offset=%d\n", currentSize, partNumber, offset)
+	//d.Conn.Logger.Printf("currentSize=%d, partNumber=%d, offset=%d\n", currentSize, partNumber, offset)
 
 	if offset < currentSize {
 		// Drop the data, which has been uploaded, from offset to current size
@@ -315,10 +319,17 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			d.pathSet[path] = true
 			d.pathLock.Unlock()
 
+			d.savePathSet()
 			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
 	}
+
+	bufBytes := d.getbuf()
+	defer func() {
+		d.putbuf(bufBytes)
+	}()
+	buf := bytes.NewBuffer(bufBytes)
 
 	if offset > currentSize {
 		// We fill the gap, which is from current size to offset , with all zeros!
@@ -332,7 +343,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		}
 
 		gapRemain := (offset - currentSize) % d.ChunkSize
-		buf := new(bytes.Buffer)
+		buf.Reset()
 		io.Copy(buf, io.LimitReader(bytes.NewReader(d.zeros), gapRemain))
 		n, err := io.Copy(buf, io.LimitReader(reader, d.ChunkSize-gapRemain))
 		totalRead += n
@@ -346,6 +357,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			d.pathSet[path] = true
 			d.pathLock.Unlock()
 
+			d.savePathSet()
 			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
@@ -363,13 +375,14 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			d.pathSet[path] = true
 			d.pathLock.Unlock()
 
+			d.savePathSet()
 			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
 	}
 
 	for {
-		buf := new(bytes.Buffer)
+		buf.Reset()
 		n, err := io.Copy(buf, io.LimitReader(reader, d.ChunkSize))
 		totalRead += n
 		if err != nil {
@@ -382,6 +395,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			d.pathSet[path] = true
 			d.pathLock.Unlock()
 
+			d.savePathSet()
 			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
@@ -399,6 +413,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			d.pathSet[path] = true
 			d.pathLock.Unlock()
 
+			d.savePathSet()
 			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
@@ -480,10 +495,9 @@ func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 // Note: This may be no more efficient than a copy followed by a delete for
 // many implementations.
 func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (err error) {
-	logger := log.New(os.Stderr, "MV: ", 0)
-	d.Conn.Logger = logger
+	d.Conn.Logger.SetPrefix("MV: ")
 	defer func() {
-		d.Conn.Logger = nil
+		d.Conn.Logger.SetPrefix("")
 	}()
 
 	d.pathLock.Lock()
@@ -507,6 +521,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (
 		delete(d.pathSet, sourcePath)
 		d.pathLock.Unlock()
 
+		d.savePathSet()
 		time.Sleep(5 * time.Second)
 		return
 	}
@@ -515,10 +530,9 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
 func (d *driver) Delete(ctx context.Context, path string) (err error) {
-	logger := log.New(os.Stderr, "DE: ", 0)
-	d.Conn.Logger = logger
+	d.Conn.Logger.SetPrefix("DE: ")
 	defer func() {
-		d.Conn.Logger = nil
+		d.Conn.Logger.SetPrefix("")
 	}()
 
 	var sub []string
@@ -543,21 +557,11 @@ func (d *driver) Delete(ctx context.Context, path string) (err error) {
 			//return
 			continue
 		}
-		// Ensure it is really deleted!
-		//for i := 0; i < 5; i++ {
-		//	time.Sleep(5 * time.Second)
-		//	rc, _, err := d.Conn.ObjectOpen(d.Bucket, d.bs2Path(item), false, nil)
-		//	if err == bs2.ObjectNotFound {
-		//		break
-		//	}
-		//	if err == nil {
-		//		rc.Close()
-		//	}
-		//}
 		d.pathLock.Lock()
 		delete(d.pathSet, item)
 		d.pathLock.Unlock()
 	}
+	d.savePathSet()
 	return
 }
 
@@ -566,12 +570,6 @@ func (d *driver) Delete(ctx context.Context, path string) (err error) {
 // May return an ErrUnsupportedMethod in certain StorageDriver
 // implementations.
 func (d *driver) URLFor(ctx context.Context, path string, options map[string]interface{}) (URL string, err error) {
-	logger := log.New(os.Stderr, "UF: ", 0)
-	d.Conn.Logger = logger
-	defer func() {
-		d.Conn.Logger = nil
-	}()
-
 	d.pathLock.Lock()
 	if !d.pathSet[path] {
 		d.pathLock.Unlock()
@@ -627,4 +625,50 @@ type nopWriter struct {
 func (nopWriter) Write(p []byte) (n int, err error) {
 	// Do nothing
 	return len(p), nil
+}
+
+// getbuf returns a buffer from the driver's pool with length d.ChunkSize.
+func (d *driver) getbuf() []byte {
+	return d.pool.Get().([]byte)
+}
+
+func (d *driver) putbuf(p []byte) {
+	copy(p, d.zeros)
+	d.pool.Put(p)
+}
+
+func (d *driver) savePathSet() {
+	paths := new(bytes.Buffer)
+	d.pathLock.Lock()
+	for file := range d.pathSet {
+		fmt.Fprintln(paths, file)
+	}
+	d.pathLock.Unlock()
+	contents := paths.Bytes()
+	if len(contents) == 0 {
+		d.Conn.ObjectDelete(d.Bucket, "__ALL_FILES__")
+	} else {
+		d.Conn.ObjectPutBytes(d.Bucket, "__ALL_FILES__", contents, "text/plain")
+	}
+}
+
+func (d *driver) loadPathSet() {
+	paths, err := d.Conn.ObjectGetBytes(d.Bucket, "__ALL_FILES__")
+	if err != nil {
+		return
+	}
+	reader := bytes.NewReader(paths)
+	d.pathLock.Lock()
+	for k := range d.pathSet {
+		delete(d.pathSet, k)
+	}
+	for {
+		var file string
+		_, err := fmt.Fscanln(reader, &file)
+		if err != nil {
+			break
+		}
+		d.pathSet[file] = true
+	}
+	d.pathLock.Unlock()
 }
