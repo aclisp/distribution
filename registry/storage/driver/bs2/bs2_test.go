@@ -10,6 +10,8 @@ import (
 	"github.com/docker/distribution/registry/storage/driver/testsuites"
 	"gopkg.in/check.v1"
 	"io/ioutil"
+	"os"
+	"runtime"
 	"strings"
 )
 
@@ -20,6 +22,8 @@ var bs2DriverConstructor func() (*Driver, error)
 var skipBS2 func() string
 
 func init() {
+	runtime.GOMAXPROCS(4)
+
 	bs2DriverConstructor = func() (*Driver, error) {
 		parameters := DriverParameters{
 			AccessKey: "ak_tqo",
@@ -37,6 +41,14 @@ func init() {
 }
 
 func testBasic(t *testing.T) {
+	tf, err := ioutil.TempFile("", "tf")
+	if err != nil {
+		t.Fatalf("Can not create temp file: %s", err)
+	}
+	defer os.Remove(tf.Name())
+	defer tf.Close()
+	fmt.Printf("Temp file is %s\n", tf.Name())
+
 	driver, err := factory.Create(driverName, map[string]interface{}{
 		"accesskey": "ak_tqo",
 		"secretkey": "78f372edb18b8c803b3192fbd441880f96cd7dfe",

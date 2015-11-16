@@ -16,8 +16,8 @@ import (
 	"reflect"
 	"strconv"
 	"strings"
-	"time"
 	"sync"
+	"time"
 )
 
 const driverName = "bs2"
@@ -54,8 +54,8 @@ type driver struct {
 	Bucket    string
 	ChunkSize int64
 
-	zeros   []byte          // shared, zero-valued buffer used for WriteStream
-	pathSet map[string]bool // remember all the paths, because BS2 does not have "LIST" API
+	zeros    []byte          // shared, zero-valued buffer used for WriteStream
+	pathSet  map[string]bool // remember all the paths, because BS2 does not have "LIST" API
 	pathLock sync.Mutex
 }
 
@@ -165,6 +165,13 @@ func (d *driver) GetContent(ctx context.Context, path string) (contents []byte, 
 		d.Conn.Logger = nil
 	}()
 
+	d.pathLock.Lock()
+	if !d.pathSet[path] {
+		d.pathLock.Unlock()
+		return nil, storagedriver.PathNotFoundError{Path: path}
+	}
+	d.pathLock.Unlock()
+
 	for i := 0; i < 5; i++ {
 		var buf bytes.Buffer
 		_, err = d.Conn.ObjectGet(d.Bucket, d.bs2Path(path), &buf, false, nil)
@@ -175,7 +182,7 @@ func (d *driver) GetContent(ctx context.Context, path string) (contents []byte, 
 		}
 		return
 	}
-	return nil, parseError(path, err)
+	return nil, storagedriver.PathNotFoundError{Path: path}
 }
 
 // PutContent stores the []byte content at a location designated by "path".
@@ -194,6 +201,8 @@ func (d *driver) PutContent(ctx context.Context, path string, contents []byte) (
 	d.pathLock.Lock()
 	d.pathSet[path] = true
 	d.pathLock.Unlock()
+
+	time.Sleep(5 * time.Second)
 	return
 }
 
@@ -206,6 +215,13 @@ func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (rc 
 	defer func() {
 		d.Conn.Logger = nil
 	}()
+
+	d.pathLock.Lock()
+	if !d.pathSet[path] {
+		d.pathLock.Unlock()
+		return nil, storagedriver.PathNotFoundError{Path: path}
+	}
+	d.pathLock.Unlock()
 
 	headers := make(bs2.Headers)
 	headers["Range"] = "bytes=" + strconv.FormatInt(offset, 10) + "-"
@@ -221,7 +237,7 @@ func (d *driver) ReadStream(ctx context.Context, path string, offset int64) (rc 
 		}
 		return
 	}
-	return nil, parseError(path, err)
+	return nil, storagedriver.PathNotFoundError{Path: path}
 }
 
 // WriteStream stores the contents of the provided io.Reader at a
@@ -263,7 +279,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			break
 		}
 		if err != nil {
-			return 0, parseError(path, err)
+			return 0, storagedriver.PathNotFoundError{Path: path}
 		}
 		// Got a multi-part, let's check it status, and resume current size and part number if necessary
 		if !multi.Uploading {
@@ -289,7 +305,17 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		// Drop the data, which has been uploaded, from offset to current size
 		n, err := io.Copy(nopWriter{}, io.LimitReader(reader, currentSize-offset))
 		totalRead += n
-		if err != nil || n == 0 {
+		if err != nil {
+			return totalRead, err
+		}
+		if n == 0 {
+			//partNumber++
+			//err := multi.Complete(partNumber)
+			d.pathLock.Lock()
+			d.pathSet[path] = true
+			d.pathLock.Unlock()
+
+			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
 	}
@@ -310,7 +336,17 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		io.Copy(buf, io.LimitReader(bytes.NewReader(d.zeros), gapRemain))
 		n, err := io.Copy(buf, io.LimitReader(reader, d.ChunkSize-gapRemain))
 		totalRead += n
-		if err != nil || buf.Len() == 0 {
+		if err != nil {
+			return totalRead, err
+		}
+		if buf.Len() == 0 {
+			//partNumber++
+			//err := multi.Complete(partNumber)
+			d.pathLock.Lock()
+			d.pathSet[path] = true
+			d.pathLock.Unlock()
+
+			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
 
@@ -326,6 +362,8 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			d.pathLock.Lock()
 			d.pathSet[path] = true
 			d.pathLock.Unlock()
+
+			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
 	}
@@ -334,7 +372,17 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		buf := new(bytes.Buffer)
 		n, err := io.Copy(buf, io.LimitReader(reader, d.ChunkSize))
 		totalRead += n
-		if err != nil || n == 0 {
+		if err != nil {
+			return totalRead, err
+		}
+		if n == 0 {
+			//partNumber++
+			//err := multi.Complete(partNumber)
+			d.pathLock.Lock()
+			d.pathSet[path] = true
+			d.pathLock.Unlock()
+
+			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
 
@@ -350,6 +398,8 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			d.pathLock.Lock()
 			d.pathSet[path] = true
 			d.pathLock.Unlock()
+
+			time.Sleep(5 * time.Second)
 			return totalRead, err
 		}
 	}
@@ -370,6 +420,8 @@ func (d *driver) Stat(ctx context.Context, path string) (info storagedriver.File
 				return storagedriver.FileInfoInternal{FileInfoFields: fi}, nil
 			}
 		}
+		d.pathLock.Unlock()
+		return nil, storagedriver.PathNotFoundError{Path: path}
 	}
 	d.pathLock.Unlock()
 
@@ -391,7 +443,7 @@ func (d *driver) Stat(ctx context.Context, path string) (info storagedriver.File
 		fi.IsDir = false
 		return storagedriver.FileInfoInternal{FileInfoFields: fi}, nil
 	}
-	return nil, parseError(path, err)
+	return nil, storagedriver.PathNotFoundError{Path: path}
 }
 
 // List returns a list of the objects that are direct descendants of the
@@ -434,6 +486,13 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (
 		d.Conn.Logger = nil
 	}()
 
+	d.pathLock.Lock()
+	if !d.pathSet[sourcePath] {
+		d.pathLock.Unlock()
+		return storagedriver.PathNotFoundError{Path: sourcePath}
+	}
+	d.pathLock.Unlock()
+
 	for i := 0; i < 5; i++ {
 		_, err = d.Conn.ObjectMove(d.Bucket, d.bs2Path(sourcePath), d.Bucket, d.bs2Path(destPath), nil)
 		if err == bs2.ObjectNotFound {
@@ -447,9 +506,11 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (
 		d.pathSet[destPath] = true
 		delete(d.pathSet, sourcePath)
 		d.pathLock.Unlock()
+
+		time.Sleep(5 * time.Second)
 		return
 	}
-	return parseError(sourcePath, err)
+	return storagedriver.PathNotFoundError{Path: sourcePath}
 }
 
 // Delete recursively deletes all objects stored at "path" and its subpaths.
@@ -511,6 +572,13 @@ func (d *driver) URLFor(ctx context.Context, path string, options map[string]int
 		d.Conn.Logger = nil
 	}()
 
+	d.pathLock.Lock()
+	if !d.pathSet[path] {
+		d.pathLock.Unlock()
+		return "", storagedriver.PathNotFoundError{Path: path}
+	}
+	d.pathLock.Unlock()
+
 	methodString := "GET"
 	method, ok := options["method"]
 	if ok {
@@ -541,32 +609,16 @@ func (d *driver) URLFor(ctx context.Context, path string, options map[string]int
 		}
 		return urls[0], nil
 	}
-	return "", parseError(path, err)
+	return "", storagedriver.PathNotFoundError{Path: path}
 }
 
 func (d *driver) getContentType() string {
 	return "application/octet-stream"
 }
 
-type bs2PathAction int
-
-const (
-	bs2PathGet = iota
-	bs2PathPut = iota
-	bs2PathDel = iota
-)
-
 func (d *driver) bs2Path(path string) string {
 	// Return the path with leading slash trimmed, which is required by BS2 API.
 	return strings.TrimLeft(path, "/")
-}
-
-func parseError(path string, err error) error {
-	if err == bs2.ObjectNotFound {
-		return storagedriver.PathNotFoundError{Path: path}
-	}
-
-	return err
 }
 
 type nopWriter struct {
