@@ -192,8 +192,8 @@ func (d *driver) PutContent(ctx context.Context, path string, contents []byte) (
 		return
 	}
 	d.pathLock.Lock()
-	defer d.pathLock.Unlock()
 	d.pathSet[path] = true
+	d.pathLock.Unlock()
 	return
 }
 
@@ -324,8 +324,8 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			//partNumber++
 			//err := multi.Complete(partNumber)
 			d.pathLock.Lock()
-			defer d.pathLock.Unlock()
 			d.pathSet[path] = true
+			d.pathLock.Unlock()
 			return totalRead, err
 		}
 	}
@@ -348,8 +348,8 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			//partNumber++
 			//err := multi.Complete(partNumber)
 			d.pathLock.Lock()
-			defer d.pathLock.Unlock()
 			d.pathSet[path] = true
+			d.pathLock.Unlock()
 			return totalRead, err
 		}
 	}
@@ -384,8 +384,8 @@ func (d *driver) Stat(ctx context.Context, path string) (info storagedriver.File
 			return nil, err
 		}
 		d.pathLock.Lock()
-		defer d.pathLock.Unlock()
 		d.pathSet[path] = true
+		d.pathLock.Unlock()
 		fi.Size = obj.Bytes
 		fi.ModTime = obj.LastModified
 		fi.IsDir = false
@@ -444,9 +444,9 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (
 			return
 		}
 		d.pathLock.Lock()
-		defer d.pathLock.Unlock()
 		d.pathSet[destPath] = true
 		delete(d.pathSet, sourcePath)
+		d.pathLock.Unlock()
 		return
 	}
 	return parseError(sourcePath, err)
@@ -494,8 +494,8 @@ func (d *driver) Delete(ctx context.Context, path string) (err error) {
 		//	}
 		//}
 		d.pathLock.Lock()
-		defer d.pathLock.Unlock()
 		delete(d.pathSet, item)
+		d.pathLock.Unlock()
 	}
 	return
 }
