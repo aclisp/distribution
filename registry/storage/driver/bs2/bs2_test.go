@@ -169,7 +169,7 @@ func testBasic(t *testing.T) {
 	}
 }
 
-func TestSaveLoadPathSet(t *testing.T) {
+func testSaveLoadPathSet(t *testing.T) {
 	d := &driver{
 		Conn: bs2.Connection{
 			AccessKey: "ak_tqo",
@@ -182,16 +182,11 @@ func TestSaveLoadPathSet(t *testing.T) {
 		pathSet:   make(map[string]bool),
 	}
 
-	d.savePathSet()
 	d.pathSet["/a/b/1"] = true
 	d.pathSet["/a/b/2"] = true
 	d.pathSet["/a/b/3"] = true
 	d.pathSet["/xyz"] = true
-	//d.savePathSet()
 	d.loadPathSet()
-	//if len(d.pathSet) != 4 {
-	//	t.Fatalf("PathSet length is not correct: %d", len(d.pathSet))
-	//}
 	fmt.Printf("PathSet is %#v\n", d.pathSet)
 	urls, err := d.Conn.ObjectTempUrl(d.Bucket, "__ALL_FILES__", "GET", 900)
 	if err != nil {
@@ -200,5 +195,4 @@ func TestSaveLoadPathSet(t *testing.T) {
 	for _, url := range urls {
 		fmt.Println(url)
 	}
-	d.Conn.ObjectDelete(d.Bucket, "__ALL_FILES__")
 }

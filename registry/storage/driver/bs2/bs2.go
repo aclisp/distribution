@@ -304,6 +304,11 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 	}
 
 	//d.Conn.Logger.Printf("currentSize=%d, partNumber=%d, offset=%d\n", currentSize, partNumber, offset)
+	bufBytes := d.getbuf()
+	defer func() {
+		d.putbuf(bufBytes)
+	}()
+	buf := bytes.NewBuffer(bufBytes)
 
 	if offset < currentSize {
 		// Drop the data, which has been uploaded, from offset to current size
@@ -313,23 +318,9 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			return totalRead, err
 		}
 		if n == 0 {
-			//partNumber++
-			//err := multi.Complete(partNumber)
-			d.pathLock.Lock()
-			d.pathSet[path] = true
-			d.pathLock.Unlock()
-
-			d.savePathSet()
-			time.Sleep(5 * time.Second)
-			return totalRead, err
+			goto done
 		}
 	}
-
-	bufBytes := d.getbuf()
-	defer func() {
-		d.putbuf(bufBytes)
-	}()
-	buf := bytes.NewBuffer(bufBytes)
 
 	if offset > currentSize {
 		// We fill the gap, which is from current size to offset , with all zeros!
@@ -351,15 +342,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			return totalRead, err
 		}
 		if buf.Len() == 0 {
-			//partNumber++
-			//err := multi.Complete(partNumber)
-			d.pathLock.Lock()
-			d.pathSet[path] = true
-			d.pathLock.Unlock()
-
-			d.savePathSet()
-			time.Sleep(5 * time.Second)
-			return totalRead, err
+			goto done
 		}
 
 		partNumber++
@@ -369,15 +352,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		}
 
 		if part.Size != d.ChunkSize {
-			//partNumber++
-			//err := multi.Complete(partNumber)
-			d.pathLock.Lock()
-			d.pathSet[path] = true
-			d.pathLock.Unlock()
-
-			d.savePathSet()
-			time.Sleep(5 * time.Second)
-			return totalRead, err
+			goto done
 		}
 	}
 
@@ -389,15 +364,7 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 			return totalRead, err
 		}
 		if n == 0 {
-			//partNumber++
-			//err := multi.Complete(partNumber)
-			d.pathLock.Lock()
-			d.pathSet[path] = true
-			d.pathLock.Unlock()
-
-			d.savePathSet()
-			time.Sleep(5 * time.Second)
-			return totalRead, err
+			goto done
 		}
 
 		partNumber++
@@ -407,17 +374,20 @@ func (d *driver) WriteStream(ctx context.Context, path string, offset int64, rea
 		}
 
 		if part.Size != d.ChunkSize {
-			//partNumber++
-			//err := multi.Complete(partNumber)
-			d.pathLock.Lock()
-			d.pathSet[path] = true
-			d.pathLock.Unlock()
-
-			d.savePathSet()
-			time.Sleep(5 * time.Second)
-			return totalRead, err
+			goto done
 		}
 	}
+
+done:
+	//partNumber++
+	//err := multi.Complete(partNumber)
+	d.pathLock.Lock()
+	d.pathSet[path] = true
+	d.pathLock.Unlock()
+
+	d.savePathSet()
+	time.Sleep(5 * time.Second)
+	return totalRead, err
 }
 
 // Stat retrieves the FileInfo for the given path, including the current
@@ -468,7 +438,6 @@ func (d *driver) List(ctx context.Context, path string) ([]string, error) {
 		path = path + "/"
 	}
 
-	// Implement locally. TODO Need to consider availability
 	sub := make(map[string]bool)
 	d.pathLock.Lock()
 	for file := range d.pathSet {
@@ -554,7 +523,6 @@ func (d *driver) Delete(ctx context.Context, path string) (err error) {
 
 	for _, item := range sub {
 		if err = d.Conn.ObjectDelete(d.Bucket, d.bs2Path(item)); err != nil {
-			//return
 			continue
 		}
 		d.pathLock.Lock()
@@ -646,7 +614,7 @@ func (d *driver) savePathSet() {
 	d.pathLock.Unlock()
 	contents := paths.Bytes()
 	if len(contents) == 0 {
-		d.Conn.ObjectDelete(d.Bucket, "__ALL_FILES__")
+		d.Conn.ObjectPutString(d.Bucket, "__ALL_FILES__", "<nil>", "text/plain")
 	} else {
 		d.Conn.ObjectPutBytes(d.Bucket, "__ALL_FILES__", contents, "text/plain")
 	}
@@ -655,6 +623,9 @@ func (d *driver) savePathSet() {
 func (d *driver) loadPathSet() {
 	paths, err := d.Conn.ObjectGetBytes(d.Bucket, "__ALL_FILES__")
 	if err != nil {
+		return
+	}
+	if len(paths) == len("<nil>") && string(paths) == "<nil>" {
 		return
 	}
 	reader := bytes.NewReader(paths)
