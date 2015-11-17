@@ -476,6 +476,39 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (
 	}
 	d.pathLock.Unlock()
 
+	// {{ Ensure multi-part uploads complete!
+	var multi *bs2.Multi
+	for i := 0; i < 5; i++ {
+		multi, err = d.Conn.Multi(d.Bucket, d.bs2Path(sourcePath))
+		if err == bs2.ObjectNotFound {
+			time.Sleep(1 * time.Second)
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		break
+	}
+	if err != nil {
+		return storagedriver.PathNotFoundError{Path: sourcePath}
+	}
+	if multi.Uploading {
+		lastPart, err := multi.LastPart()
+		if err != nil {
+			return err
+		}
+		partNumber, err := strconv.Atoi(lastPart.PartNumber)
+		if err != nil {
+			return err
+		}
+		partNumber++
+		err = multi.Complete(partNumber)
+		if err != nil {
+			return err
+		}
+	}
+	// }}
+
 	for i := 0; i < 5; i++ {
 		_, err = d.Conn.ObjectMove(d.Bucket, d.bs2Path(sourcePath), d.Bucket, d.bs2Path(destPath), nil)
 		if err == bs2.ObjectNotFound {
