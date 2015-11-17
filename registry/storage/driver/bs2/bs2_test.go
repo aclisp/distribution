@@ -25,10 +25,13 @@ var skipBS2 func() string
 func init() {
 	runtime.GOMAXPROCS(4)
 
+	accessKey := os.Getenv("BS2_ACCESS_KEY")
+	secretKey := os.Getenv("BS2_SECRET_KEY")
+
 	bs2DriverConstructor = func() (*Driver, error) {
 		parameters := DriverParameters{
-			AccessKey: "ak_tqo",
-			SecretKey: "78f372edb18b8c803b3192fbd441880f96cd7dfe",
+			AccessKey: accessKey,
+			SecretKey: secretKey,
 			Bucket:    "sigmalargeimages",
 			ChunkSize: defaultChunkSize,
 		}
@@ -36,9 +39,17 @@ func init() {
 		return New(parameters), nil
 	}
 
+	// Skip BS2 storage driver tests if environment variable parameters are not provided
+	skipBS2 = func() string {
+		if accessKey == "" || secretKey == "" {
+			return "Must set BS2_ACCESS_KEY and BS2_SECRET_KEY to run BS2 tests"
+		}
+		return ""
+	}
+
 	testsuites.RegisterSuite(func() (storagedriver.StorageDriver, error) {
 		return bs2DriverConstructor()
-	}, testsuites.NeverSkip)
+	}, skipBS2)
 }
 
 func testBasic(t *testing.T) {
