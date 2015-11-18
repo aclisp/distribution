@@ -25,7 +25,7 @@ storage:
         blobdescriptor: redis
     bs2:
         accesskey: ak_tqo
-        secretkey: 78f372edb18b8c803b3192fbd441880f96cd7dfe
+        secretkey: 78f372xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
         bucket: sigmalargeimages
         chunksize: 524288
     maintenance:
