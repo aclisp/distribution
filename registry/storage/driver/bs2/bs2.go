@@ -208,7 +208,7 @@ func (d *driver) PutContent(ctx context.Context, path string, contents []byte) (
 	d.pathLock.Unlock()
 
 	d.savePathSet()
-	time.Sleep(5 * time.Second)
+	//time.Sleep(5 * time.Second)
 	return
 }
 
@@ -386,7 +386,7 @@ done:
 	d.pathLock.Unlock()
 
 	d.savePathSet()
-	time.Sleep(5 * time.Second)
+	//time.Sleep(5 * time.Second)
 	return totalRead, err
 }
 
@@ -524,7 +524,7 @@ func (d *driver) Move(ctx context.Context, sourcePath string, destPath string) (
 		d.pathLock.Unlock()
 
 		d.savePathSet()
-		time.Sleep(5 * time.Second)
+		//time.Sleep(5 * time.Second)
 		return
 	}
 	return storagedriver.PathNotFoundError{Path: sourcePath}

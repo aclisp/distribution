@@ -3,13 +3,10 @@ package bs2
 import (
 	"bytes"
 	"fmt"
-	"github.com/aclisp/go-bs2"
 	storagedriver "github.com/docker/distribution/registry/storage/driver"
-	"github.com/docker/distribution/registry/storage/driver/factory"
 	"github.com/docker/distribution/registry/storage/driver/testsuites"
 	"gopkg.in/check.v1"
 	"io/ioutil"
-	"log"
 	"os"
 	"runtime"
 	"strings"
@@ -53,6 +50,10 @@ func init() {
 }
 
 func testBasic(t *testing.T) {
+	if skipBS2() != "" {
+		t.Fatal(skipBS2())
+	}
+
 	tf, err := ioutil.TempFile("", "tf")
 	if err != nil {
 		t.Fatalf("Can not create temp file: %s", err)
@@ -61,11 +62,7 @@ func testBasic(t *testing.T) {
 	defer tf.Close()
 	fmt.Printf("Temp file is %s\n", tf.Name())
 
-	driver, err := factory.Create(driverName, map[string]interface{}{
-		"accesskey": "ak_tqo",
-		"secretkey": "78f372edb18b8c803b3192fbd441880f96cd7dfe",
-		"bucket":    "sigmalargeimages",
-	})
+	driver, err := bs2DriverConstructor()
 	if err != nil {
 		t.Fatalf("Can not create driver from factory: %s", err)
 	}
@@ -177,33 +174,5 @@ func testBasic(t *testing.T) {
 	}
 	if string(out[60:]) != "12345678901234567890" {
 		t.Fatalf("What I get is not the same as what I put! got=%v", out)
-	}
-}
-
-func testSaveLoadPathSet(t *testing.T) {
-	d := &driver{
-		Conn: bs2.Connection{
-			AccessKey: "ak_tqo",
-			SecretKey: "78f372edb18b8c803b3192fbd441880f96cd7dfe",
-			Logger:    log.New(os.Stdout, "", 0),
-		},
-		Bucket:    "sigmalargeimages",
-		ChunkSize: defaultChunkSize,
-		zeros:     make([]byte, defaultChunkSize),
-		pathSet:   make(map[string]bool),
-	}
-
-	d.pathSet["/a/b/1"] = true
-	d.pathSet["/a/b/2"] = true
-	d.pathSet["/a/b/3"] = true
-	d.pathSet["/xyz"] = true
-	d.loadPathSet()
-	fmt.Printf("PathSet is %#v\n", d.pathSet)
-	urls, err := d.Conn.ObjectTempUrl(d.Bucket, "__ALL_FILES__", "GET", 900)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, url := range urls {
-		fmt.Println(url)
 	}
 }
