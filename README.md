@@ -7,7 +7,47 @@
 * 一个完整的 [BS2 Golang SDK](Godeps/_workspace/src/github.com/aclisp/go-bs2/)
 * 用 BS2 作后端存储的[驱动插件](registry/storage/driver/bs2/)
 * 修改[默认配置](cmd/registry/config-dev.yml)，让其使用 BS2
-* [main.go](cmd/registry/main.go) 静态链接 BS2 驱动
+* 修改 [main.go](cmd/registry/main.go) 静态链接 BS2 驱动
+
+# 如何使用
+
+1. 下载源代码
+
+    git clone <this repo>
+    cd <this repo dir>
+
+2. 构建镜像
+
+    docker build -t sigmas/docker-registry-bs2:2.1 .
+
+3. 启动
+
+    docker run -d -p 5000:5000 --name registry sigmas/docker-registry-bs2:2.1
+
+4. 从官方仓库下载某个镜像
+
+    docker pull ubuntu
+
+5. 让这个镜像能够存储到私有仓库
+
+    docker tag ubuntu localhost:5000/myubuntu
+
+6. 上传到私有仓库
+
+    docker push localhost:5000/myubuntu
+
+7. 删除本地镜像
+
+    docker rmi ubuntu
+
+8. 从私有仓库下载
+
+    docker pull localhost:5000/myubuntu
+
+9. 停止
+
+    docker stop registry && docker rm -v registry
+
 
 以下是原始 README 内容。
 ---
