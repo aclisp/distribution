@@ -39,6 +39,7 @@
 1. 删除本地镜像
 
         docker rmi ubuntu
+        docker rmi localhost:5000/myubuntu
 
 1. 从私有仓库下载
 
