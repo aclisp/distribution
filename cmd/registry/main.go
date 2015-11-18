@@ -31,6 +31,7 @@ import (
 	_ "github.com/docker/distribution/registry/storage/driver/oss"
 	_ "github.com/docker/distribution/registry/storage/driver/s3"
 	_ "github.com/docker/distribution/registry/storage/driver/swift"
+	_ "github.com/docker/distribution/registry/storage/driver/bs2"
 	"github.com/docker/distribution/uuid"
 	"github.com/docker/distribution/version"
 	gorhandlers "github.com/gorilla/handlers"
