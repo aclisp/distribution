@@ -13,40 +13,40 @@
 
 1. 下载源代码
 
-    git clone <this repo>
-    cd <this repo dir>
+        git clone <this repo>
+        cd <this repo dir>
 
-2. 构建镜像
+1. 构建镜像
 
-    docker build -t sigmas/docker-registry-bs2:2.1 .
+        docker build -t sigmas/docker-registry-bs2:2.1 .
 
-3. 启动
+1. 启动
 
-    docker run -d -p 5000:5000 --name registry sigmas/docker-registry-bs2:2.1
+        docker run -d -p 5000:5000 --name registry sigmas/docker-registry-bs2:2.1
 
-4. 从官方仓库下载某个镜像
+1. 从官方仓库下载某个镜像
 
-    docker pull ubuntu
+        docker pull ubuntu
 
-5. 让这个镜像能够存储到私有仓库
+1. 让这个镜像能够存储到私有仓库
 
-    docker tag ubuntu localhost:5000/myubuntu
+        docker tag ubuntu localhost:5000/myubuntu
 
-6. 上传到私有仓库
+1. 上传到私有仓库
 
-    docker push localhost:5000/myubuntu
+        docker push localhost:5000/myubuntu
 
-7. 删除本地镜像
+1. 删除本地镜像
 
-    docker rmi ubuntu
+        docker rmi ubuntu
 
-8. 从私有仓库下载
+1. 从私有仓库下载
 
-    docker pull localhost:5000/myubuntu
+        docker pull localhost:5000/myubuntu
 
-9. 停止
+1. 停止
 
-    docker stop registry && docker rm -v registry
+        docker stop registry && docker rm -v registry
 
 
 以下是原始 README 内容。
