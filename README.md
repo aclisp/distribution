@@ -1,3 +1,17 @@
+# 这是一个什么项目
+
+![What is this project](docker-registry-bs2.png)
+
+本项目的开发内容包括
+
+* 一个完整的 [BS2 Golang SDK](Godeps/_workspace/src/github.com/aclisp/go-bs2/)
+* 用 BS2 作后端存储的[驱动插件](registry/storage/driver/bs2/)
+* 修改[默认配置](cmd/registry/config-dev.yml)，让其使用 BS2
+* [main.go](cmd/registry/main.go) 静态链接 BS2 驱动
+
+以下是原始 README 内容。
+---
+
 # Distribution
 
 The Docker toolset to pack, ship, store, and deliver content.
