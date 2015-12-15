@@ -1,3 +1,58 @@
+# 这是一个什么项目
+
+![What is this project](docker-registry-bs2.png)
+
+本项目的开发内容包括
+
+* 一个完整的 [BS2 Golang SDK](Godeps/_workspace/src/github.com/aclisp/go-bs2/)
+* 用 BS2 作后端存储的[驱动插件](registry/storage/driver/bs2/)
+* 修改[默认配置](cmd/registry/config-dev.yml)，让其使用 BS2
+* 修改 [main.go](cmd/registry/main.go) 静态链接 BS2 驱动
+
+# 如何使用
+
+1. 下载源代码
+
+        git clone <this repo>
+        cd <this repo dir>
+
+1. 构建镜像
+
+        docker build -t sigmas/docker-registry-bs2:2.1 .
+
+1. 启动
+
+        docker run -d -p 5000:5000 --name registry sigmas/docker-registry-bs2:2.1
+
+1. 从官方仓库下载某个镜像
+
+        docker pull ubuntu
+
+1. 让这个镜像能够存储到私有仓库
+
+        docker tag ubuntu localhost:5000/myubuntu
+
+1. 上传到私有仓库
+
+        docker push localhost:5000/myubuntu
+
+1. 删除本地镜像
+
+        docker rmi ubuntu
+        docker rmi localhost:5000/myubuntu
+
+1. 从私有仓库下载
+
+        docker pull localhost:5000/myubuntu
+
+1. 停止
+
+        docker stop registry && docker rm -v registry
+
+
+以下是原始 README 内容。
+---
+
 # Distribution
 
 The Docker toolset to pack, ship, store, and deliver content.

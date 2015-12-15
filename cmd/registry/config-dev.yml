@@ -1,6 +1,6 @@
 version: 0.1
 log:
-  level: debug
+  level: info
   fields:
     service: registry
     environment: development
@@ -23,8 +23,11 @@ storage:
       enabled: true
     cache:
         blobdescriptor: redis
-    filesystem:
-        rootdirectory: /var/lib/registry
+    bs2:
+        accesskey: ak_tqo
+        secretkey: 78f372xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+        bucket: sigmalargeimages
+        chunksize: 524288
     maintenance:
         uploadpurging:
             enabled: false

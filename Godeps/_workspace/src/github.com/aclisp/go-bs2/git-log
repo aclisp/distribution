@@ -1,0 +1,71 @@
+commit a6f4a4ca7cb0f21996d22bd40a8099b94eba5184
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Tue Nov 17 21:38:48 2015 +0800
+
+    Update doc.
+
+commit ff7f2fd78c83f61030111a54e9f74c82e2bebc39
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Tue Nov 17 11:31:52 2015 +0800
+
+    Minor fix.
+
+commit 1257592edcd63182104ab1dc5da4e87ccbb8152d
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Sun Nov 15 20:41:28 2015 +0800
+
+    Fix for testing.
+
+commit 2c5cfb477fb7c2bf13f5e77572092267104c229a
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Sat Nov 14 00:29:12 2015 +0800
+
+    Add uploading flag to Multi.
+
+commit 3f256f8a64caff1fdd96d1b5f0fde54b2de90aa8
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Fri Nov 13 18:58:43 2015 +0800
+
+    Fix hostnames.
+
+commit bb3a285061bdb5d9e1472edb2cf6b30fea9bef56
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Fri Nov 13 10:03:57 2015 +0800
+
+    Fix logging format.
+
+commit 5d057d41036a2d9b9ea5aef20341747a13741cb5
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Thu Nov 12 14:53:00 2015 +0800
+
+    Minor fix.
+
+commit 6e07eda3f86d866ac154a6075c2efff98cf4301a
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Thu Nov 12 10:08:22 2015 +0800
+
+    Check for upload id.
+
+commit 922bc137479774c154304ae3cb4f51e3a380b02c
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Thu Nov 12 00:08:34 2015 +0800
+
+    Add multi part uploads.
+
+commit d5d556dfa11a1e65265d88679e8fe92fbe592e48
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Wed Nov 11 00:33:41 2015 +0800
+
+    Add more methods.
+
+commit 055018b0828068020d4ba4af1247402ef82b0504
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Tue Nov 10 01:07:25 2015 +0800
+
+    First version.
+
+commit a6db143fbc1265d5ba7e067cd71c9845c31c34df
+Author: Homer Huang <aclisp@gmail.com>
+Date:   Mon Nov 9 16:47:06 2015 +0800
+
+    Initial commit

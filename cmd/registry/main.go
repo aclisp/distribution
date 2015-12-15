@@ -16,6 +16,7 @@ import (
 	_ "github.com/docker/distribution/registry/storage/driver/oss"
 	_ "github.com/docker/distribution/registry/storage/driver/s3"
 	_ "github.com/docker/distribution/registry/storage/driver/swift"
+	_ "github.com/docker/distribution/registry/storage/driver/bs2"
 )
 
 func main() {
