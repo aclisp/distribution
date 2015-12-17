@@ -18,11 +18,11 @@
 
 1. 构建镜像
 
-        docker build -t sigmas/docker-registry-bs2:2.1 .
+        docker build -t sigmas/docker-registry-bs2:2.2 .
 
 1. 启动
 
-        docker run -d -p 5000:5000 --name registry sigmas/docker-registry-bs2:2.1
+        docker run -d -p 5000:5000 --name registry sigmas/docker-registry-bs2:2.2
 
 1. 从官方仓库下载某个镜像
 
